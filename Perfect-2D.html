@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Perfect 2D · Atlas</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#162529;color:#e8d8ad;font:14px Georgia,serif}button,select{font:inherit;color:inherit;background:#272c25;border:1px solid #82704a;border-radius:4px;padding:7px 10px;cursor:pointer}button:hover,button:focus-visible,select:focus-visible{outline:2px solid #e5ba63;outline-offset:2px}#world{position:fixed;width:100%;height:100%;touch-action:none;cursor:grab}#world:active{cursor:grabbing}.panel{background:#1e241feF;border:1px solid #9a8056;box-shadow:0 3px 18px #0008;border-radius:5px}header{position:fixed;left:16px;top:16px;padding:12px 18px;pointer-events:none}h1,h2,p{margin:0}h1{font-size:26px;font-weight:normal;color:#f4dfab}#location{margin-top:5px;color:#e1c58b}#nav{position:fixed;right:16px;top:16px;padding:8px}#mini{display:block;width:184px;height:auto;cursor:crosshair;border:1px solid #72674e}.row{display:flex;gap:6px;align-items:center;margin-top:6px}.row button{flex:1}footer{position:fixed;bottom:12px;left:16px;padding:8px 12px;color:#f1dfb3}dialog{width:min(950px,96vw);max-height:96dvh;padding:12px;color:inherit}dialog::backdrop{background:#101817af}.toolbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap}.toolbar h2{margin-right:auto}#atlas{display:block;width:min(100%,calc((96dvh - 118px)*1.5));height:auto;margin:auto;border:1px solid #8e7750;cursor:crosshair}#legend{padding-top:8px;text-align:center}.gold{color:#ffd176}@media(max-width:620px){#mini{width:110px}header{left:8px;top:8px;padding:8px}h1{font-size:20px}#nav{right:8px;top:8px}footer{left:8px;right:8px;font-size:12px}}
+</style>
+</head>
+<body>
+<canvas id="world" aria-label="Mapa 2D explorável"></canvas>
+<header class="panel"><h1>Perfect 2D</h1><p id="location"></p><small id="coords"></small></header>
+<section id="nav" class="panel" aria-label="Navegação">
+<canvas id="mini" width="300" height="200" aria-label="Minimapa"></canvas>
+<div class="row"><button id="out" aria-label="Afastar">−</button><button id="in" aria-label="Aproximar">+</button><button id="show">Mapa M</button></div>
+</section>
+<footer class="panel">WASD / setas · Arraste para mover · Roda ou +/− para zoom</footer>
+<dialog class="panel" id="map">
+<div class="toolbar"><h2>Atlas do mundo</h2><select id="places" aria-label="Ir para um lugar"><option value="">Escolha um lugar</option></select><button id="close">Fechar</button></div>
+<canvas id="atlas" width="1080" height="720" aria-label="Atlas interativo"></canvas>
+<p id="legend"><span class="gold">◆</span> Capital &nbsp; • Povoado &nbsp; ⊕ Sua câmera &nbsp; — Clique para viajar</p>
+</dialog>
+<script>
+'use strict';
+const get=id=>document.getElementById(id);
+const W=9600,H=6400,S=64;
+const clamp=(n,min,max)=>Math.max(min,Math.min(max,n));
+const terrain=[
+ ['Mar Interior','#28474a','#376067'],['Costa e ilhas','#9f8b60','#ba9f71'],
+ ['Campos do Leste','#7d813e','#999958'],['Bosque Meridional','#4d653c','#657b4d'],
+ ['Escarpas Rubras','#965736','#b57648'],['Dunas do Poente','#b28d55','#caab6c'],
+ ['Cordilheira Branca','#a9b2aa','#d6d9c9'],['Brejo Nebuloso','#515f43','#657453'],
+ ['Campos Centrais','#777746','#969463'],['Ilhas de Cinza','#494244','#625251']
+];
+const places=[
+ ['Estalagem do Bambu',7370,2740,'vila',2],['Capital dos Humanos',7870,2100,'capital',2],
+ ['Vila do Vau',6780,2340,'vila',2],['Pouso dos Peregrinos',6900,3160,'vila',8],
+ ['Vila das Ameixeiras',8300,2620,'vila',2],['Porto da Bruma',8860,3480,'porto',1],
+ ['Torre do Farol',8810,4230,'vila',1],['Porto das Juncas',8180,4790,'porto',7],
+ ['Vila da Névoa',7650,4480,'vila',7],['Refúgio dos Juncos',7140,4980,'vila',7],
+ ['Aldeia das Folhas',5860,4780,'vila',3],['Capital dos Alados',5150,5180,'capital',3],
+ ['Vila das Cascatas',4250,5070,'vila',3],['Ponte das Garças',5250,4310,'vila',3],
+ ['Entre-Rios',5680,3330,'capital',8],['Mercado dos Peregrinos',4700,3460,'vila',8],
+ ['Vila do Pomar',5970,2590,'vila',8],['Ponte da Colheita',4870,2590,'vila',8],
+ ['Capital dos Selvagens',2340,3080,'capital',4],['Vila dos Cânions',1740,2640,'vila',4],
+ ['Aldeia do Cobre',2930,3510,'vila',4],['Posto do Desfiladeiro',3180,2510,'vila',4],
+ ['Oásis da Lua',1640,4250,'vila',5],['Povoado das Dunas',2130,5000,'vila',5],
+ ['Passagem do Poente',3360,4450,'vila',5],['Estrada da Geada',4110,1900,'vila',6],
+ ['Refúgio da Neve',3320,1320,'vila',6],['Fortaleza da Geada',5380,1100,'capital',6],
+ ['Mosteiro do Cedro',6550,1420,'vila',6],['Posto do Passo Branco',7170,1710,'vila',6],
+ ['Porto do Sal',9340,5160,'porto',9],['Fortim das Cinzas',9160,5580,'vila',9],
+ ['Vila do Lótus',6360,4050,'vila',3],['Aldeia da Escarpa',3660,3020,'vila',4]
+].map(([name,x,y,type,b])=>({name,x,y,type,b}));
+const routes=[
+ [27,26,25,21,33,18,19],[27,28,29,1,4,5,6,7,8,9],[29,2,1,0,3,14,15,33],
+ [25,17,16,2],[17,15,23,22,18,20,24,22],[24,12,11,10,13,14],[10,32,14],
+ [32,8],[9,10],[31,30],[20,15],[0,4],[16,14]
+];
+const rivers=[
+ [[4750,500],[4700,1100],[4530,1540],[4500,1980],[4640,2440],[4550,2850],[5160,3200],[6000,3620],[6170,4250],[6900,4690],[6780,5800]],
+ [[6440,510],[6140,1050],[6220,1700],[6410,2300],[6250,2730],[6700,3060],[6000,3620]],
+ [[3570,3500],[3820,3890],[3880,4430],[4310,4650],[4900,4680],[5450,4750],[6170,4250]]
+];
+const bridges=[];
+for(const route of routes){
+ for(let i=1;i<route.length;i++){
+  const a=places[route[i-1]],b=places[route[i]];
+  const dx=b.x-a.x,dy=b.y-a.y;
+  for(const river of rivers){
+   for(let j=1;j<river.length;j++){
+    const [rx,ry]=river[j-1],sx=river[j][0]-rx,sy=river[j][1]-ry;
+    const det=dx*sy-dy*sx;
+    if(!det)continue;
+    const t=((rx-a.x)*sy-(ry-a.y)*sx)/det;
+    const u=((rx-a.x)*dy-(ry-a.y)*dx)/det;
+    if(t>0&&t<1&&u>=0&&u<1)bridges.push([a.x+t*dx,a.y+t*dy,Math.atan2(dy,dx)]);
+   }
+  }
+ }
+}
+function hash(x,y,s=0){
+ let n=Math.imul(x|0,374761393)+Math.imul(y|0,668265263)+Math.imul(s,144269);
+ n=Math.imul(n^(n>>>13),1274126177);return ((n^(n>>>16))>>>0)/4294967296;
+}
+function biome(x,y){
+ const coast=1-((x-4950)/4680)**2-((y-3200)/3090)**2
+  +.055*Math.sin(y/340)+.045*Math.cos(x/430+y/270);
+ if(((x-9180)/400)**2+((y-5440)/545)**2<1)return 9;
+ if(coast<0)return 0;
+ if(coast<.14&&x>7600)return 1;
+ const bend=Math.sin(x/700)*270;
+ if(y<1810+bend)return 6;
+ if(x<3540+220*Math.sin(y/400))return y<3820?4:5;
+ if(x>7160&&y>4070+160*Math.sin(x/400))return 7;
+ if(y>4220+Math.sin(x/500)*230)return 3;
+ if(x>6800-140*Math.sin(y/310))return 2;
+ return 8;
+}
+function line(ctx,points,color,width){
+ ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
+ ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineJoin='round';ctx.lineCap='round';ctx.stroke();
+}
+const overview=document.createElement('canvas');
+overview.width=1080;overview.height=720;
+const o=overview.getContext('2d');
+function drawOverview(){
+ o.save();o.scale(overview.width/W,overview.height/H);
+ for(let y=0;y<H;y+=32)for(let x=0;x<W;x+=32){
+  const [,dark,light]=terrain[biome(x+16,y+16)];
+  o.fillStyle=hash(x,y)<.32?light:dark;o.fillRect(x,y,32,32);
+ }
+ rivers.forEach(r=>line(o,r,'#456e72',67));
+ routes.forEach(r=>line(o,r.map(i=>[places[i].x,places[i].y]),'#c9ad72',18));
+ places.forEach(p=>{
+  o.fillStyle=p.type==='capital'?'#ffd37b':'#f3e0aa';
+  o.strokeStyle='#382a1c';o.lineWidth=8;
+  o.beginPath();
+  if(p.type==='capital'){
+   o.moveTo(p.x,p.y-45);o.lineTo(p.x+45,p.y);o.lineTo(p.x,p.y+45);o.lineTo(p.x-45,p.y);o.closePath();
+  }else{o.arc(p.x,p.y,25,0,Math.PI*2);}
+  o.fill();o.stroke();
+ });o.restore();
+}
+drawOverview();
+const world=get('world'),ctx=world.getContext('2d');
+const map=get('map'),atlas=get('atlas'),mini=get('mini'),select=get('places');
+let x=places[0].x,y=places[0].y,z=1,dirty=true,drag=null;
+let width=innerWidth,height=innerHeight,dpr=1;
+const keys=new Set();
+const labels=places.map((p,i)=>({p,i})).sort((a,b)=>a.p.name.localeCompare(b.p.name,'pt'));
+labels.forEach(({p,i})=>select.add(new Option(p.name,String(i))));
+function camera(nx,ny,nz=z){
+ x=clamp(nx,0,W);y=clamp(ny,0,H);z=clamp(nz,.18,3);dirty=true;
+}
+function resize(){
+ width=innerWidth;height=innerHeight;dpr=Math.min(devicePixelRatio||1,2);
+ world.width=width*dpr;world.height=height*dpr;dirty=true;
+}
+function polygon(g,points,fill){
+ g.beginPath();points.forEach(([a,b],i)=>i?g.lineTo(a,b):g.moveTo(a,b));
+ g.closePath();g.fillStyle=fill;g.fill();
+}
+function ellipse(g,x,y,a,b,fill){
+ g.beginPath();g.ellipse(x,y,a,b,0,0,Math.PI*2);g.fillStyle=fill;g.fill();
+}
+function prop(g,x,y,b,v){
+ if(b===0){line(g,[[x-12,y],[x+14,y]],'#ffffff12',2);return;}
+ ellipse(g,x+5,y+4,22,9,'#1f231d4d');
+ if(b===6||b===4||b===9){
+  const h=31+v*43;
+  polygon(g,[[x-36,y],[x-6,y-h],[x+39,y+5]],b===6?'#828d89':b===4?'#795039':'#3b3537');
+  polygon(g,[[x-36,y],[x-6,y-h],[x+3,y-13]],b===6?'#dae0d5':b===4?'#b58356':'#675758');
+  if(b===9)line(g,[[x-5,y-h+10],[x+1,y-30],[x-5,y-17]],'#b76641',3);
+ }else if(b===5||b===1){
+  polygon(g,[[x-14,y],[x-6,y-13],[x+12,y-10],[x+19,y+1]],b===5?'#87643d':'#726851');
+ }else{
+  g.fillStyle='#493b28';g.fillRect(x-3,y-27,6,27);
+  const h=v*22;
+  ellipse(g,x,y-27-h,24,17+h/3,b===7?'#394a36':'#35452a');
+  ellipse(g,x-6,y-33-h,18,14+h/3,b===7?'#64754b':b===3?'#627d44':'#78874a');
+  ellipse(g,x-10,y-42-h,9,5,'#b2b16866');
+ }
+}
+function building(g,x,y,b,scale){
+ g.save();g.translate(x,y);g.scale(scale,scale);
+ ellipse(g,8,3,34,14,'#191a1755');
+ const wall=b===4?'#b3956e':b===3?'#a28757':'#c5b799';
+ const roof=b===6?'#545d62':b===4?'#783f32':b===3?'#536956':'#4c5054';
+ polygon(g,[[-25,0],[-25,-26],[20,-26],[20,0]],wall);
+ polygon(g,[[20,0],[20,-26],[34,-35],[34,-10]],'#79694e');
+ polygon(g,[[-33,-24],[-21,-49],[24,-52],[17,-25]],roof);
+ polygon(g,[[17,-25],[24,-52],[40,-33],[32,-23]],'#353b39');
+ for(let i=-24;i<17;i+=6)line(g,[[i,-27],[i+9,-46]],'#d1c6aa36',1);
+ g.fillStyle='#5c402c';g.fillRect(-25,-5,45,4);g.fillRect(-9,-19,12,19);
+ g.fillStyle='#d6a357';g.fillRect(-21,-17,8,7);g.fillRect(8,-17,8,7);
+ g.restore();
+}
+function settlement(g,p,index){
+ const large=p.type==='capital',dock=p.type==='porto';
+ const radius=large?245:105;
+ ellipse(g,p.x,p.y,radius,radius*.66,'#b6a074');
+ if(large){
+  for(const offset of [-1,1]){
+   const xx=p.x+offset*212;
+   line(g,[[xx,p.y-138],[xx,p.y+106],[p.x+offset*44,p.y+106]],'#514a3b',20);
+   line(g,[[xx,p.y-143],[xx,p.y+97],[p.x+offset*44,p.y+97]],'#a1957c',13);
+   building(g,xx,p.y+101,p.b,1);
+  }
+  line(g,[[p.x-212,p.y-143],[p.x+212,p.y-143]],'#a1957c',15);
+  building(g,p.x,p.y-45,p.b,1.85);
+ }
+ if(dock){
+  for(let i=0;i<4;i++)line(g,[[p.x+43+i*14,p.y+40],[p.x+43+i*14,p.y+110]],'#917449',9);
+ }
+ const amount=large?13:4+(index%3);
+ for(let i=0;i<amount;i++){
+  const col=i%5-2,row=Math.floor(i/5);
+  const dx=col*(large?74:34)+(hash(index,i)*12-6);
+  const dy=large?row*51-65:(i%2)*43-12;
+  if(large&&col===0&&row===0)continue;
+  building(g,p.x+dx,p.y+dy,p.b,large?.85:.67);
+ }
+}
+function drawWorld(){
+ ctx.setTransform(dpr,0,0,dpr,0,0);ctx.fillStyle='#263b3b';ctx.fillRect(0,0,width,height);
+ ctx.translate(width/2,height/2);ctx.scale(z,z);ctx.translate(-x,-y);
+ const left=x-width/2/z,right=x+width/2/z,top=y-height/2/z,bottom=y+height/2/z;
+ if(z<.32){ctx.drawImage(overview,0,0,W,H);}
+ else{
+  const blocks=[];
+  for(let yy=Math.max(0,Math.floor(top/S)*S-S);yy<Math.min(H,bottom+S);yy+=S){
+   for(let xx=Math.max(0,Math.floor(left/S)*S-S);xx<Math.min(W,right+S);xx+=S){
+    const b=biome(xx+S/2,yy+S/2),[,dark,light]=terrain[b];
+    ctx.fillStyle=dark;ctx.fillRect(xx,yy,S+.5,S+.5);
+    for(let i=0;i<7;i++){
+     ctx.fillStyle=i%2?'#14171318':light;ctx.globalAlpha=i%2?1:.32;
+     ctx.fillRect(xx+hash(xx,yy,i)*60,yy+hash(yy,xx,i+1)*60,2+hash(i,xx)*12,1+hash(i,yy)*4);
+    }
+    ctx.globalAlpha=1;
+    if(hash(xx,yy,8)<(b===3||b===6?.45:.21))blocks.push([xx+32,yy+37,b,hash(xx,yy,9)]);
+   }
+  }
+  rivers.forEach(r=>{line(ctx,r,'#928867',93);line(ctx,r,'#385b60',75);line(ctx,r,'#547c7c',49);});
+  routes.forEach(r=>{
+   const pts=r.map(i=>[places[i].x,places[i].y]);
+   line(ctx,pts,'#555638',47);line(ctx,pts,'#a38d60',41);line(ctx,pts,'#bcaa78',24);
+  });
+  for(const [bx,by,angle] of bridges){
+   ctx.save();ctx.translate(bx,by);ctx.rotate(angle);
+   ctx.fillStyle='#514638';ctx.fillRect(-56,-22,112,44);
+   ctx.fillStyle='#b9a382';ctx.fillRect(-56,-16,112,32);
+   for(let i=-48;i<=48;i+=12)line(ctx,[[i,-14],[i,14]],'#76644d',1);
+   line(ctx,[[-55,-21],[55,-21]],'#d1bd94',3);
+   line(ctx,[[-55,21],[55,21]],'#d1bd94',3);
+   ctx.restore();
+  }
+  blocks.forEach(a=>{
+   if(places.some(p=>Math.abs(a[0]-p.x)<(p.type==='capital'?265:115)&&Math.abs(a[1]-p.y)<(p.type==='capital'?165:95)))return;
+   if(routes.some(r=>r.slice(1).some((k,i)=>nearSegment(a,places[r[i]],places[k],33))))return;
+   if(rivers.some(r=>r.slice(1).some((v,i)=>nearSegment(a,{x:r[i][0],y:r[i][1]},{x:v[0],y:v[1]},57))))return;
+   prop(ctx,...a);
+  });
+  places.forEach((p,i)=>{if(p.x>left-270&&p.x<right+270&&p.y>top-270&&p.y<bottom+270)settlement(ctx,p,i);});
+ }
+ ctx.font=`${15/z}px Georgia`;ctx.textAlign='center';ctx.lineWidth=3/z;ctx.strokeStyle='#20221b';ctx.fillStyle='#ffe5ac';
+ for(const p of places){
+  if(z<.55&&p.type!=='capital')continue;
+  const yy=p.y-(z<.32?100:p.type==='capital'?190:95);
+  ctx.strokeText(p.name,p.x,yy);ctx.fillText(p.name,p.x,yy);
+ }
+ ctx.setTransform(dpr,0,0,dpr,0,0);
+ ctx.strokeStyle='#fff1bc';ctx.lineWidth=1;
+ ctx.beginPath();ctx.arc(width/2,height/2,6,0,Math.PI*2);ctx.stroke();
+}
+function nearSegment(a,p,q,limit){
+ const vx=q.x-p.x,vy=q.y-p.y;
+ const t=clamp(((a[0]-p.x)*vx+(a[1]-p.y)*vy)/(vx*vx+vy*vy),0,1);
+ return (a[0]-p.x-t*vx)**2+(a[1]-p.y-t*vy)**2<limit*limit;
+}
+function mapView(canvas,full){
+ const c=canvas.getContext('2d'),w=canvas.width,h=canvas.height;
+ c.drawImage(overview,0,0,w,h);
+ if(full){
+  c.font='14px Georgia';c.textAlign='center';c.lineWidth=3;c.strokeStyle='#26241d';c.fillStyle='#f9eac3';
+  places.filter(p=>p.type==='capital'||p===places[0]).forEach(p=>{
+   c.strokeText(p.name,p.x/W*w,p.y/H*h-9);c.fillText(p.name,p.x/W*w,p.y/H*h-9);
+  });
+ }
+ const u=x/W*w,v=y/H*h;
+ c.strokeStyle='#ffeab8';c.lineWidth=1;
+ c.strokeRect(u-width/z/W*w/2,v-height/z/H*h/2,width/z/W*w,height/z/H*h);
+ c.beginPath();c.arc(u,v,full?7:4,0,Math.PI*2);c.stroke();
+ c.fillStyle='#ffeab8';c.fillRect(u-1,v-1,2,2);
+}
+function showMap(){
+ if(map.open){map.close();return;}
+ keys.clear();select.value='';map.showModal();mapView(atlas,true);
+}
+function navigateCanvas(e,canvas){
+ const r=canvas.getBoundingClientRect();
+ camera((e.clientX-r.left)/r.width*W,(e.clientY-r.top)/r.height*H);
+ if(map.open)map.close();
+}
+function zoom(f,px=width/2,py=height/2){
+ const next=clamp(z*f,.18,3);
+ camera(x+(px-width/2)*(1/z-1/next),y+(py-height/2)*(1/z-1/next),next);
+}
+get('show').onclick=showMap;get('close').onclick=()=>map.close();
+get('in').onclick=()=>zoom(1.25);get('out').onclick=()=>zoom(1/1.25);
+mini.onclick=e=>navigateCanvas(e,mini);atlas.onclick=e=>navigateCanvas(e,atlas);
+select.onchange=()=>{
+ if(select.value==='')return;
+ const p=places[Number(select.value)];camera(p.x,p.y,Math.max(z,.75));map.close();
+};
+const movements=['w','a','s','d','arrowup','arrowleft','arrowdown','arrowright'];
+addEventListener('keydown',e=>{
+ const k=e.key.toLowerCase();
+ if(k==='m'&&!e.repeat){e.preventDefault();showMap();return;}
+ if(map.open)return;
+ if(movements.includes(k)){e.preventDefault();keys.add(k);}
+ if(k==='+'||k==='=')zoom(1.25);
+ if(k==='-')zoom(1/1.25);
+});
+addEventListener('keyup',e=>keys.delete(e.key.toLowerCase()));
+addEventListener('blur',()=>{keys.clear();drag=null;});
+addEventListener('resize',resize);
+world.addEventListener('wheel',e=>{e.preventDefault();zoom(Math.exp(-clamp(e.deltaY,-300,300)*.0015),e.clientX,e.clientY);},{passive:false});
+world.addEventListener('pointerdown',e=>{
+ if(!e.isPrimary||e.button!==0)return;
+ world.setPointerCapture(e.pointerId);drag={x:e.clientX,y:e.clientY};
+});
+world.addEventListener('pointermove',e=>{
+ if(!e.isPrimary||!drag)return;
+ camera(x-(e.clientX-drag.x)/z,y-(e.clientY-drag.y)/z);
+ drag={x:e.clientX,y:e.clientY};
+});
+for(const event of ['pointerup','pointercancel','lostpointercapture'])world.addEventListener(event,()=>drag=null);
+let last=0;
+function tick(now){
+ const dt=Math.min((now-last)/1000,.05);last=now;
+ const dx=Number(keys.has('d')||keys.has('arrowright'))-Number(keys.has('a')||keys.has('arrowleft'));
+ const dy=Number(keys.has('s')||keys.has('arrowdown'))-Number(keys.has('w')||keys.has('arrowup'));
+ if(dx||dy){const speed=540*dt/z/Math.hypot(dx,dy);camera(x+dx*speed,y+dy*speed);}
+ if(dirty){
+  dirty=false;drawWorld();mapView(mini,false);if(map.open)mapView(atlas,true);
+  const nearby=places.find(p=>Math.hypot(x-p.x,y-p.y)<(p.type==='capital'?250:120));
+  get('location').textContent=nearby?.name??terrain[biome(x,y)][0];
+  get('coords').textContent=`X ${Math.round(x)} · Y ${Math.round(y)} · ${Math.round(z*100)}%`;
+ }
+ requestAnimationFrame(tick);
+}
+resize();requestAnimationFrame(tick);
+</script>
+</body>
+</html>
